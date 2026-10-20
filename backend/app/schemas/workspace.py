@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
 from typing import Any, List, Optional
-from pydantic import BaseModel, ConfigDict
-from app.models.entities import DifficultyEnum, ProblemStatusEnum, VerdictEnum
+from pydantic import BaseModel, ConfigDict, Field
+from app.models.entities import DifficultyEnum, ProblemStatusEnum
 
 # Create or SEED schemas
 class LanguageTemplateCreate(BaseModel):
@@ -22,7 +22,7 @@ class ProblemCreate(BaseModel):
     difficulty: DifficultyEnum
     prob_description: str
     prob_image_url: Optional[str] = None
-    prob_examples: List[dict[str, Any]] = []
+    prob_examples: List[dict[str, Any]] = Field(default_factory=list)
     prob_constraints: str
     time_limit_ms: int = 2000
     memory_limit_kb: int = 262144
@@ -69,7 +69,7 @@ class ProblemWorkspaceResponse(BaseModel):
     memory_limit_kb: int
     language_templates: List[LanguageTemplatePublic]
     sample_test_cases: List[SampleTestCasePublic]
-    saved_drafts: dict[str, str] = {}  # { "python": "user's half-solved code..." }
+    saved_drafts: dict[str, str] = Field(default_factory=dict)
 
 
 # --- AUTO-SAVE & BOOKMARK SCHEMAS ---

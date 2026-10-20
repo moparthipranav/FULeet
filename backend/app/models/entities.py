@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from sqlalchemy import (
     Boolean,
@@ -10,11 +10,13 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     Text,
+    Uuid,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -47,7 +49,7 @@ class User(Base):
     __tablename__ = "users"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
@@ -75,7 +77,7 @@ class Problem(Base):
     __tablename__ = "problems"
 
     problem_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     slug: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -84,7 +86,9 @@ class Problem(Base):
     )
     prob_description: Mapped[str] = mapped_column(Text, nullable=False)
     prob_image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    prob_examples: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
+    prob_examples: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list
+    )
     prob_constraints: Mapped[str] = mapped_column(Text, nullable=False)
     time_limit_ms: Mapped[int] = mapped_column(Integer, default=2000, nullable=False)
     memory_limit_kb: Mapped[int] = mapped_column(Integer, default=262144, nullable=False)
@@ -106,7 +110,7 @@ class LanguageTemplate(Base):
     __tablename__ = "language_template"
 
     problem_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         ForeignKey("problems.problem_id", ondelete="CASCADE"),
         primary_key=True,
     )
@@ -122,10 +126,10 @@ class TestCase(Base):
     __tablename__ = "test_cases"
 
     test_case_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     problem_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         ForeignKey("problems.problem_id", ondelete="CASCADE"),
         nullable=False,
         index=True,
@@ -143,12 +147,12 @@ class UserProblemStatus(Base):
     __tablename__ = "user_problem_status"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         ForeignKey("users.user_id", ondelete="CASCADE"),
         primary_key=True,
     )
     problem_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         ForeignKey("problems.problem_id", ondelete="CASCADE"),
         primary_key=True,
     )
@@ -170,12 +174,12 @@ class UserDraft(Base):
     __tablename__ = "user_draft"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         ForeignKey("users.user_id", ondelete="CASCADE"),
         primary_key=True,
     )
     problem_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         ForeignKey("problems.problem_id", ondelete="CASCADE"),
         primary_key=True,
     )
@@ -197,15 +201,15 @@ class Submission(Base):
     )
 
     sub_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         ForeignKey("users.user_id", ondelete="CASCADE"),
         nullable=False,
     )
     problem_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         ForeignKey("problems.problem_id", ondelete="CASCADE"),
         nullable=False,
     )

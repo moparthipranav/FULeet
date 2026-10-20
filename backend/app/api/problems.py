@@ -7,15 +7,18 @@ This API endpoints should the following tasks:
 6. Toggle favourite/solve again 
 """
 
+import logging
 import uuid
 from fastapi import APIRouter
 from fastapi import Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy import func
 from typing import Any, List, Optional, cast
 import redis.asyncio as aioredis
 from sqlalchemy.orm import selectinload
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.core.database import get_db
 from app.core.redis import get_redis
@@ -38,6 +41,16 @@ from app.schemas.workspace import ( # Pydantic schemes represent the network bou
 
 
 router = APIRouter(prefix="/api/v1", tags=["Workspace & Problems"])
+logger = logging.getLogger(__name__)
+
+
+def _dialect_insert(db: AsyncSession, table):
+    dialect_name = db.get_bind().dialect.name
+    if dialect_name == "sqlite":
+        return sqlite_insert(table)
+    if dialect_name == "postgresql":
+        return pg_insert(table)
+    raise RuntimeError(f"Unsupported database dialect for upsert: {dialect_name}")
 
 # 1. Create a DEMO user (for testing the foreign keys)
 @router.post("/users/demo")
@@ -176,11 +189,14 @@ async def get_problem_workspace(
         for d in db_drafts.scalars().all():
             saved_drafts[d.language] = d.code
 
-        # Check redis for even fresher 
         for tpl in problem.language_templates:
             lang = tpl.template_language
             redis_key = f"draft:{user_id}:{problem.problem_id}:{lang}"
-            cached_code = await redis_client.get(name=redis_key)
+            try:
+                cached_code = await redis_client.get(name=redis_key)
+            except aioredis.RedisError:
+                logger.warning("Redis draft lookup failed; using PostgreSQL draft")
+                continue
             if cached_code is not None:
                 saved_drafts[lang] = (
                     cached_code.decode("utf-8")
@@ -188,21 +204,21 @@ async def get_problem_workspace(
                     else cached_code
                 )
 
-        return ProblemWorkspaceResponse(
-            problem_id=problem.problem_id,
-            slug=problem.slug,
-            title=problem.title,
-            difficulty=problem.difficulty,
-            prob_description=problem.prob_description,
-            prob_image_url=problem.prob_image_url,
-            prob_examples=cast(List[dict[str, Any]], problem.prob_examples),
-            prob_constraints=problem.prob_constraints,
-            time_limit_ms=problem.time_limit_ms,
-            memory_limit_kb=problem.memory_limit_kb,
-            language_templates=cast(List[Any], problem.language_templates),
-            sample_test_cases=cast(List[Any], sample_test_cases),
-            saved_drafts=saved_drafts,
-        )
+    return ProblemWorkspaceResponse(
+        problem_id=problem.problem_id,
+        slug=problem.slug,
+        title=problem.title,
+        difficulty=problem.difficulty,
+        prob_description=problem.prob_description,
+        prob_image_url=problem.prob_image_url,
+        prob_examples=cast(List[dict[str, Any]], problem.prob_examples),
+        prob_constraints=problem.prob_constraints,
+        time_limit_ms=problem.time_limit_ms,
+        memory_limit_kb=problem.memory_limit_kb,
+        language_templates=cast(List[Any], problem.language_templates),
+        sample_test_cases=cast(List[Any], sample_test_cases),
+        saved_drafts=saved_drafts,
+    )
 
 
 # 5. Continuous AUTO-SAVE Draft endpoint
@@ -220,12 +236,12 @@ async def save_code_draft(
     if not problem_id:
         raise HTTPException(status_code=404, detail="Problem not found")
 
-    # Fast cache write in redis
-    redis_key = f"draft:{payload.user_id}:{problem_id}:{payload.language}"
-    await redis_client.set(redis_key, payload.code, ex=86400)
+    user = await db.get(User, payload.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
     stmt = (
-        pg_insert(UserDraft)
+        _dialect_insert(db, UserDraft)
         .values(
             user_id=payload.user_id,
             problem_id=problem_id,
@@ -234,11 +250,17 @@ async def save_code_draft(
         )
         .on_conflict_do_update(
             index_elements=["user_id", "problem_id", "language"],
-            set_={"code": payload.code, "updated_at": pg_insert(UserDraft).excluded.updated_at},
+            set_={"code": payload.code, "updated_at": func.now()},
         )
     )
     await db.execute(stmt)
     await db.commit()
+
+    redis_key = f"draft:{payload.user_id}:{problem_id}:{payload.language}"
+    try:
+        await redis_client.set(redis_key, payload.code, ex=86400)
+    except aioredis.RedisError:
+        logger.warning("Redis draft cache write failed; PostgreSQL draft was saved")
 
     return {"status": "saved", "language": payload.language}
 
@@ -261,28 +283,38 @@ async def toggle_bookmark(
     if not user_id:
         raise HTTPException(status_code=404, detail="User not found")
 
+    values = {
+        "user_id": payload.user_id,
+        "problem_id": problem_id,
+        "status": None,
+        "is_favourite": bool(payload.is_favourite),
+        "solve_again": bool(payload.solve_again),
+    }
+    updates = {}
+    if payload.is_favourite is not None:
+        updates["is_favourite"] = payload.is_favourite
+    if payload.solve_again is not None:
+        updates["solve_again"] = payload.solve_again
+    if not updates:
+        updates["user_id"] = UserProblemStatus.user_id
+
+    stmt = (
+        _dialect_insert(db, UserProblemStatus)
+        .values(**values)
+        .on_conflict_do_update(
+            index_elements=["user_id", "problem_id"],
+            set_=updates,
+        )
+    )
+    await db.execute(stmt)
+
+    await db.commit()
     existing = await db.scalar(
         select(UserProblemStatus).where(
             UserProblemStatus.user_id == payload.user_id,
             UserProblemStatus.problem_id == problem_id,
-        )
+        ).execution_options(populate_existing=True)
     )
-
-    if not existing:
-        existing = UserProblemStatus(
-            user_id=payload.user_id,
-            problem_id=problem_id,
-            is_favourite=bool(payload.is_favourite),
-            solve_again=bool(payload.solve_again),
-        )
-        db.add(existing)
-    else:
-        if payload.is_favourite is not None:
-            existing.is_favourite = payload.is_favourite
-        if payload.solve_again is not None:
-            existing.solve_again = payload.solve_again
-
-    await db.commit()
     return {
         "problem_id": problem_id,
         "is_favourite": existing.is_favourite,
