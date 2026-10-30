@@ -315,6 +315,8 @@ async def toggle_bookmark(
             UserProblemStatus.problem_id == problem_id,
         ).execution_options(populate_existing=True)
     )
+    if existing is None:
+        raise RuntimeError("Problem status was not available after the upsert")
     return {
         "problem_id": problem_id,
         "is_favourite": existing.is_favourite,
